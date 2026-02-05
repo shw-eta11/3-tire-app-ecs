@@ -1,6 +1,8 @@
 const express = require('express');
 const mysql = require('mysql2');
 const cors = require('cors');
+const fs = require('fs');
+const path = require('path');
 require('dotenv').config();
 
 const app = express();
@@ -33,10 +35,24 @@ const waitForDB = () => {
       setTimeout(waitForDB, 5000);
     } else {
       console.log('Connected to MySQL');
+      runInitSQL();
     }
   });
 };
 waitForDB();
+
+const runInitSQL = () => {
+  const sqlPath = path.join(__dirname, 'db', 'init.sql');
+  const initSQL = fs.readFileSync(sqlPath, 'utf8');
+
+  db.query(initSQL, (err) => {
+    if (err) {
+      console.error('Init SQL failed:', err);
+    } else {
+      console.log('Init SQL executed successfully');
+    }
+  });
+};
 
 // Test initial connection
 db.getConnection((err, connection) => {
