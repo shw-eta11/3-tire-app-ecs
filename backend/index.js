@@ -65,8 +65,8 @@ db.getConnection((err, connection) => {
 });
 
 // ✅ 4. Routes
-app.get('/api/message', (req, res) => {
-  db.query('SELECT message FROM messages ORDER BY RAND() LIMIT 1', (err, results) => {
+app.get('/api/messages', (req, res) => {
+  db.query('SELECT * FROM messages', (err, results) => {
     if (err) return res.status(500).json({ error: err });
     res.json({ message: results.length ? results[0].message : 'No messages found' });
   });
