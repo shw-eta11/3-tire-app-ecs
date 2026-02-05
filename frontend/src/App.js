@@ -3,15 +3,15 @@ import axios from 'axios';
 import './App.css';
 
 function App() {
-  const [message, setMessage] = useState('');
+  const [messages, setMessages] = useState([]);
   const [categories, setCategories] = useState([]);
   const [newMessage, setNewMessage] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('');
 
   useEffect(() => {
-    axios.get(`${process.env.REACT_APP_BACKEND_URL}/api/message`)
-      .then(res => setMessage(res.data.message))
-      .catch(() => setMessage('Error fetching message'));
+    axios.get(`${process.env.REACT_APP_BACKEND_URL}/api/messages`)
+      .then(res => setMessages(res.data.messages))
+      .catch(() => setMessages('Error fetching message'));
 
     axios.get(`${process.env.REACT_APP_BACKEND_URL}/api/categories`)
       .then(res => setCategories(res.data))
@@ -25,7 +25,6 @@ function App() {
       category: selectedCategory
     })
     .then(res => {
-      setMessage(res.data.message);
       setNewMessage('');
       setSelectedCategory('');
     })
@@ -36,8 +35,6 @@ function App() {
     <div className="App">
       <header className="App-header">
         <h1>3-Tier React + Node + MySQL App</h1>
-        <p>{message}</p>
-
         <div className="form">
           <input 
             type="text" 
@@ -53,6 +50,21 @@ function App() {
           </select>
           <button onClick={handleAddMessage}>Add Message</button>
         </div>
+        <div className="messages">
+        <h2>All Messages</h2>
+
+        {messages.length === 0 ? (
+          <p>No messages yet</p>
+        ) : (
+          <ul>
+            {messages.map(msg => (
+              <li key={msg.id}>
+                <strong>{msg.category}</strong> : {msg.message}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
       </header>
     </div>
   );

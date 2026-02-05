@@ -68,7 +68,7 @@ db.getConnection((err, connection) => {
 app.get('/api/messages', (req, res) => {
   db.query('SELECT * FROM messages', (err, results) => {
     if (err) return res.status(500).json({ error: err });
-    res.json({ message: results.length ? results : 'No messages found' });
+    res.json({ messages: results});
   });
 });
 
