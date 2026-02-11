@@ -12,6 +12,13 @@ jobs:
   deploy-frontend:
     runs-on: ubuntu-latest
 
+    env:
+      CLUSTER_NAME: cluster-1
+      SERVICE_NAME: frontend-task-service-ql1lkjuv
+      TASK_FAMILY: frontend-task
+      ECR_REPOSITORY: frontend
+      IMAGE_TAG: ${{ github.sha }}
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -30,16 +37,33 @@ jobs:
       - name: Build and push Frontend image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPOSITORY: frontend
-          IMAGE_TAG: latest
         run: |
           cd frontend
           docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
 
-      - name: Deploy Frontend to ECS
+      - name: Get current task definition
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition $TASK_FAMILY \
+            --query taskDefinition > task-def.json
+
+      - name: Update task definition with new image
+        run: |
+          NEW_IMAGE=${{ steps.login-ecr.outputs.registry }}/$ECR_REPOSITORY:$IMAGE_TAG
+          cat task-def.json | jq --arg IMAGE "$NEW_IMAGE" \
+          '.containerDefinitions[0].image = $IMAGE 
+          | del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy)' \
+          > new-task-def.json
+
+      - name: Register new task definition
+        run: |
+          aws ecs register-task-definition \
+            --cli-input-json file://new-task-def.json
+
+      - name: Update ECS service
         run: |
           aws ecs update-service \
-            --cluster cluster-1 \
-            --service frontend-task-service-ql1lkjuv \
+            --cluster $CLUSTER_NAME \
+            --service $SERVICE_NAME \
             --force-new-deployment
