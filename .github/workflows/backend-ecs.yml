@@ -41,6 +41,9 @@ jobs:
       # Step 1: Read and bump semantic version
       - name: Read and bump version
         id: version
+        env:
+          BUMP_MAJOR: ${{ github.event.inputs.bump_major }}
+          BUMP_MINOR: ${{ github.event.inputs.bump_minor }}
         run: |
           # Read current version from VERSION file
           VERSION=$(cat backend/VERSION)
@@ -49,12 +52,12 @@ jobs:
           # Split version into MAJOR.MINOR.PATCH
           IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
 
-          # Bump version based on workflow_dispatch checkboxes
-          if [ "${{ github.event.inputs.bump_major }}" == "true" ]; then
+          # Bump version based on checkboxes
+          if [ "$BUMP_MAJOR" == "true" ]; then
             MAJOR=$((MAJOR + 1))
             MINOR=0
             PATCH=0
-          elif [ "${{ github.event.inputs.bump_minor }}" == "true" ]; then
+          elif [ "$BUMP_MINOR" == "true" ]; then
             MINOR=$((MINOR + 1))
             PATCH=0
           else

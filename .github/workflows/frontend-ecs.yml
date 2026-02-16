@@ -6,7 +6,6 @@ on:
       - main
     paths:
       - 'frontend/**'
-
   workflow_dispatch:
     inputs:
       bump_major:
@@ -32,23 +31,33 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      # ✅ Step 1: Read and bump semantic version
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      # Step 1: Read and bump semantic version
       - name: Read and bump version
         id: version
+        env:
+          BUMP_MAJOR: ${{ github.event.inputs.bump_major }}
+          BUMP_MINOR: ${{ github.event.inputs.bump_minor }}
         run: |
-          # Read current version from file
-          VERSION=$(cat VERSION)
+          # Read current version from VERSION file
+          VERSION=$(cat frontend/VERSION)
           echo "Current version: $VERSION"
 
-          # Split MAJOR.MINOR.PATCH
+          # Split into MAJOR.MINOR.PATCH
           IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
 
-          # Bump version based on checkbox inputs
-          if [ "${{ cc= "true" ]; then
+          # Bump version based on checkboxes
+          if [ "$BUMP_MAJOR" == "true" ]; then
             MAJOR=$((MAJOR + 1))
             MINOR=0
             PATCH=0
-          elif [ "${{ github.event.inputs.bump_minor }}" == "true" ]; then
+          elif [ "$BUMP_MINOR" == "true" ]; then
             MINOR=$((MINOR + 1))
             PATCH=0
           else
@@ -58,52 +67,31 @@ jobs:
           NEW_VERSION="$MAJOR.$MINOR.$PATCH"
           echo "New version: $NEW_VERSION"
 
-          # Save back to VERSION file
-          echo "$NEW_VERSION" > VERSION
+          # Save new version back to VERSION file
+          echo "$NEW_VERSION" > frontend/VERSION
 
-          # Export IMAGE_TAG for later steps
+          # Export IMAGE_TAG for Docker build and ECS
           echo "IMAGE_TAG=$NEW_VERSION" >> $GITHUB_ENV
 
-      # ✅ Step 2: Commit updated VERSION file
-      - name: Commit new version
-        run: |
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
-          git add VERSION
-          git commit -m "Bump version to $IMAGE_TAG" || echo "No changes to commit"
-          git push
-
-      # ✅ Step 3: Configure AWS credentials
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v2
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
-
-      # ✅ Step 4: Login to ECR
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v1
 
-      # ✅ Step 5: Build and push Docker image
       - name: Build and push Frontend image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         run: |
           cd frontend
-          echo "Building version: $IMAGE_TAG"
+          echo "Building frontend image with version: $IMAGE_TAG"
           docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
 
-      # ✅ Step 6: Get current ECS task definition
       - name: Get current task definition
         run: |
           aws ecs describe-task-definition \
             --task-definition $TASK_FAMILY \
             --query taskDefinition > task-def.json
 
-      # ✅ Step 7: Update task definition with new image
       - name: Update task definition with new image
         run: |
           NEW_IMAGE=${{ steps.login-ecr.outputs.registry }}/$ECR_REPOSITORY:$IMAGE_TAG
@@ -112,13 +100,11 @@ jobs:
           | del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy)' \
           > new-task-def.json
 
-      # ✅ Step 8: Register new task definition
       - name: Register new task definition
         run: |
           aws ecs register-task-definition \
             --cli-input-json file://new-task-def.json
 
-      # ✅ Step 9: Update ECS service
       - name: Update ECS service
         run: |
           aws ecs update-service \
