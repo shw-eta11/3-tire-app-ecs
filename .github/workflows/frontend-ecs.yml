@@ -106,6 +106,7 @@ jobs:
         run: |
           cd frontend
           echo "Building frontend image with tag: $IMAGE_TAG"
+          export DOCKER_BUILDKIT=0
           docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
 
