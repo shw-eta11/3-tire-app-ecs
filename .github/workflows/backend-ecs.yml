@@ -16,6 +16,10 @@ on:
         description: "Bump MINOR version?"
         type: boolean
         default: false
+      bump_patch:
+        description: "Bump PATCH version?"
+        type: boolean
+        default: true
 
 jobs:
   deploy-backend:
@@ -38,21 +42,35 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      # Step 1: Read and bump semantic version
-      - name: Read and bump version
+      # Step 1: Get latest image tag from ECR or use default 0.0.0
+      - name: Get latest image tag
+        id: get-latest
+        run: |
+          LATEST_TAG=$(aws ecr describe-images \
+            --repository-name $ECR_REPOSITORY \
+            --query 'sort_by(imageDetails,& imagePushedAt)[-1].imageTags[0]' \
+            --output text 2>/dev/null)
+
+          if [ "$LATEST_TAG" == "None" ] || [ -z "$LATEST_TAG" ]; then
+            echo "No previous image found. Using default 0.0.0"
+            LATEST_TAG="0.0.0"
+          else
+            echo "Latest image tag found: $LATEST_TAG"
+          fi
+
+          echo "LATEST_TAG=$LATEST_TAG" >> $GITHUB_ENV
+
+      # Step 2: Bump version based on workflow_dispatch input
+      - name: Bump version
         id: version
         env:
+          LATEST_TAG: ${{ env.LATEST_TAG }}
           BUMP_MAJOR: ${{ github.event.inputs.bump_major }}
           BUMP_MINOR: ${{ github.event.inputs.bump_minor }}
+          BUMP_PATCH: ${{ github.event.inputs.bump_patch }}
         run: |
-          # Read current version from VERSION file
-          VERSION=$(cat backend/VERSION)
-          echo "Current version: $VERSION"
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$LATEST_TAG"
 
-          # Split version into MAJOR.MINOR.PATCH
-          IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
-
-          # Bump version based on checkboxes
           if [ "$BUMP_MAJOR" == "true" ]; then
             MAJOR=$((MAJOR + 1))
             MINOR=0
@@ -60,7 +78,7 @@ jobs:
           elif [ "$BUMP_MINOR" == "true" ]; then
             MINOR=$((MINOR + 1))
             PATCH=0
-          else
+          elif [ "$BUMP_PATCH" == "true" ]; then
             PATCH=$((PATCH + 1))
           fi
 
