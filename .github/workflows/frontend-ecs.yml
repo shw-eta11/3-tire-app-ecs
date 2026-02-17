@@ -6,6 +6,8 @@ on:
       - main
     paths:
       - 'frontend/**'
+    paths-ignore:
+      - 'frontend/VERSION'
   workflow_dispatch:
     inputs:
       bump_major:
@@ -30,6 +32,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v2
@@ -45,14 +49,11 @@ jobs:
           BUMP_MAJOR: ${{ github.event.inputs.bump_major }}
           BUMP_MINOR: ${{ github.event.inputs.bump_minor }}
         run: |
-          # Read current version from VERSION file
           VERSION=$(cat frontend/VERSION)
           echo "Current version: $VERSION"
 
-          # Split into MAJOR.MINOR.PATCH
           IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
 
-          # Bump version based on checkboxes
           if [ "$BUMP_MAJOR" == "true" ]; then
             MAJOR=$((MAJOR + 1))
             MINOR=0
@@ -67,11 +68,17 @@ jobs:
           NEW_VERSION="$MAJOR.$MINOR.$PATCH"
           echo "New version: $NEW_VERSION"
 
-          # Save new version back to VERSION file
           echo "$NEW_VERSION" > frontend/VERSION
-
-          # Export IMAGE_TAG for Docker build and ECS
           echo "IMAGE_TAG=$NEW_VERSION" >> $GITHUB_ENV
+
+      # Step 2: Commit updated VERSION file
+      - name: Commit and push new version
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add frontend/VERSION
+          git commit -m "Bump frontend version to $IMAGE_TAG" || echo "No changes to commit"
+          git push
 
       - name: Login to Amazon ECR
         id: login-ecr
