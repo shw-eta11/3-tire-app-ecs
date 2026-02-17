@@ -82,14 +82,19 @@ jobs:
             PATCH=$((PATCH + 1))
           fi
 
-          NEW_VERSION="$MAJOR.$MINOR.$PATCH"
-          echo "New version: $NEW_VERSION"
+          # After bumping MAJOR, MINOR, PATCH
+            NEW_VERSION="$MAJOR.$MINOR.$PATCH"
+            NEW_TAG="v$NEW_VERSION"
 
-          # Save new version to VERSION file
-          echo "$NEW_VERSION" > backend/VERSION
+            echo "New version: $NEW_VERSION"
+            echo "New image tag: $NEW_TAG"
+
+          # Save new tag with v to VERSION file
+            echo "$NEW_TAG" > backend/VERSION
 
           # Export IMAGE_TAG for Docker/ECS
-          echo "IMAGE_TAG=$NEW_VERSION" >> $GITHUB_ENV
+            echo "IMAGE_TAG=$NEW_TAG" >> $GITHUB_ENV
+
 
       - name: Login to Amazon ECR
         id: login-ecr
