@@ -42,7 +42,7 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      # Step 1: Get latest image tag from ECR or use default v0.0.0
+      # Step 1: Get latest image tag from ECR or use default 0.0.0
       - name: Get latest image tag
         id: get-latest
         run: |
@@ -52,27 +52,24 @@ jobs:
             --output text 2>/dev/null)
 
           if [ "$LATEST_TAG" == "None" ] || [ -z "$LATEST_TAG" ]; then
-            echo "No previous image found. Using default v0.0.0"
-            LATEST_TAG="v0.0.0"
+            echo "No previous image found. Using default 0.0.0"
+            LATEST_TAG="0.0.0"
           else
             echo "Latest image tag found: $LATEST_TAG"
           fi
 
-          # Remove 'v' prefix for version bump calculation
-          VERSION_ONLY=${LATEST_TAG#v}
-          echo "VERSION_ONLY=$VERSION_ONLY" >> $GITHUB_ENV
           echo "LATEST_TAG=$LATEST_TAG" >> $GITHUB_ENV
 
       # Step 2: Bump version based on workflow_dispatch input
       - name: Bump version
         id: version
         env:
-          VERSION_ONLY: ${{ env.VERSION_ONLY }}
+          LATEST_TAG: ${{ env.LATEST_TAG }}
           BUMP_MAJOR: ${{ github.event.inputs.bump_major }}
           BUMP_MINOR: ${{ github.event.inputs.bump_minor }}
           BUMP_PATCH: ${{ github.event.inputs.bump_patch }}
         run: |
-          IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION_ONLY"
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$LATEST_TAG"
 
           if [ "$BUMP_MAJOR" == "true" ]; then
             MAJOR=$((MAJOR + 1))
@@ -86,16 +83,13 @@ jobs:
           fi
 
           NEW_VERSION="$MAJOR.$MINOR.$PATCH"
-          NEW_TAG="v$NEW_VERSION"
-
           echo "New version: $NEW_VERSION"
-          echo "New image tag: $NEW_TAG"
 
-          # Save new version with 'v' to VERSION file
-          echo "$NEW_TAG" > backend/VERSION
+          # Save new version to VERSION file
+          echo "$NEW_VERSION" > backend/VERSION
 
-          # Export IMAGE_TAG for Docker/ECS steps
-          echo "IMAGE_TAG=$NEW_TAG" >> $GITHUB_ENV
+          # Export IMAGE_TAG for Docker/ECS
+          echo "IMAGE_TAG=$NEW_VERSION" >> $GITHUB_ENV
 
       - name: Login to Amazon ECR
         id: login-ecr
