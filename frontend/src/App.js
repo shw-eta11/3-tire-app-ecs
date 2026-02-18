@@ -28,7 +28,11 @@ function App() {
       setNewMessage('');
       setSelectedCategory('');
     })
-    .catch(err => console.error(err));
+    .catch(err => {
+  console.error('Error fetching messages:', err);
+  setMessages([]); // keep type consistent (array)
+});
+
   };
 
   return (
