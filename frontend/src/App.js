@@ -25,9 +25,10 @@ function App() {
       category: selectedCategory
     })
     .then(res => {
-      setNewMessage('');
-      setSelectedCategory('');
-    })
+  console.log("API response:", res.data); // TEMP debug
+  setMessages(res.data?.messages || []);
+})
+
     .catch(err => {
   console.error('Error fetching messages:', err);
   setMessages([]); // keep type consistent (array)
@@ -57,7 +58,8 @@ function App() {
         <div className="messages">
         <h2>All Messages</h2>
 
-        {messages.length === 0 ? (
+        {!Array.isArray(messages) || messages.length === 0 ? (
+
           <p>No messages yet</p>
         ) : (
           <ul>
