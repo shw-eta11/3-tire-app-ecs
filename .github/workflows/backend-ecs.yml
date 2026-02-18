@@ -32,15 +32,9 @@ jobs:
       ECR_REPOSITORY: backend
 
     steps:
-      ############################################################
-      # 1️⃣ Checkout Code
-      ############################################################
       - name: Checkout code
         uses: actions/checkout@v3
 
-      ############################################################
-      # 2️⃣ Configure AWS Credentials
-      ############################################################
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v2
         with:
@@ -49,7 +43,7 @@ jobs:
           aws-region: ${{ secrets.AWS_REGION }}
 
       ############################################################
-      # 3️⃣ Get Highest Semantic Version From ECR
+      # 1️⃣ Get Highest Semantic Version From ECR
       ############################################################
       - name: Get latest semantic version
         id: get-latest
@@ -71,7 +65,7 @@ jobs:
           echo "LATEST_TAG=$LATEST_TAG" >> $GITHUB_ENV
 
       ############################################################
-      # 4️⃣ Validate Version Format
+      # 2️⃣ Validate Version Format
       ############################################################
       - name: Validate version format
         run: |
@@ -81,7 +75,7 @@ jobs:
           fi
 
       ############################################################
-      # 5️⃣ Bump Version Safely
+      # 3️⃣ Bump Version
       ############################################################
       - name: Bump version
         run: |
@@ -111,7 +105,7 @@ jobs:
           echo "IMAGE_TAG=$NEW_TAG" >> $GITHUB_ENV
 
       ############################################################
-      # 6️⃣ Login to ECR & Build Image
+      # 4️⃣ Build & Push Docker Image
       ############################################################
       - name: Login to Amazon ECR
         id: login-ecr
@@ -126,11 +120,73 @@ jobs:
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
 
       ############################################################
-      # 7️⃣ Save Current Task Definition (Rollback Backup)
+      # 5️⃣ Save Current Task Definition (for rollback)
       ############################################################
       - name: Save current task definition
         run: |
           CURRENT_TASK_DEF=$(aws ecs describe-services \
             --cluster $CLUSTER_NAME \
             --services $SERVICE_NAME \
-            --query 'services
+            --query 'services[0].taskDefinition' \
+            --output text)
+
+          echo "CURRENT_TASK_DEF=$CURRENT_TASK_DEF" >> $GITHUB_ENV
+
+      ############################################################
+      # 6️⃣ Register New Task Definition
+      ############################################################
+      - name: Get current task definition JSON
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition $TASK_FAMILY \
+            --query taskDefinition > task-def.json
+
+      - name: Update task definition with new image
+        run: |
+          NEW_IMAGE=${{ steps.login-ecr.outputs.registry }}/$ECR_REPOSITORY:$IMAGE_TAG
+
+          cat task-def.json | jq --arg IMAGE "$NEW_IMAGE" \
+          '.containerDefinitions[0].image = $IMAGE
+          | del(.taskDefinitionArn,.revision,.status,.requiresAttributes,
+                .compatibilities,.registeredAt,.registeredBy)' \
+          > new-task-def.json
+
+      - name: Register new task definition
+        run: |
+          NEW_TASK_DEF=$(aws ecs register-task-definition \
+            --cli-input-json file://new-task-def.json \
+            --query 'taskDefinition.taskDefinitionArn' \
+            --output text)
+
+          echo "NEW_TASK_DEF=$NEW_TASK_DEF" >> $GITHUB_ENV
+
+      ############################################################
+      # 7️⃣ Deploy New Version
+      ############################################################
+      - name: Deploy new task definition
+        run: |
+          aws ecs update-service \
+            --cluster $CLUSTER_NAME \
+            --service $SERVICE_NAME \
+            --task-definition $NEW_TASK_DEF
+
+      ############################################################
+      # 8️⃣ Wait for Stability
+      ############################################################
+      - name: Wait for service stability
+        run: |
+          aws ecs wait services-stable \
+            --cluster $CLUSTER_NAME \
+            --services $SERVICE_NAME
+
+      ############################################################
+      # 9️⃣ Rollback if Failed
+      ############################################################
+      - name: Rollback on failure
+        if: failure()
+        run: |
+          echo "Deployment failed. Rolling back..."
+          aws ecs update-service \
+            --cluster $CLUSTER_NAME \
+            --service $SERVICE_NAME \
+            --task-definition $CURRENT_TASK_DEF
