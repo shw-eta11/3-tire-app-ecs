@@ -42,60 +42,71 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      # Step 1: Get latest image tag from ECR or use default 0.0.0
-      - name: Get latest image tag
+      ############################################################
+      # 1️⃣ Get Highest Semantic Version From ECR
+      ############################################################
+      - name: Get latest semantic version
         id: get-latest
         run: |
-          LATEST_TAG=$(aws ecr describe-images \
+          TAGS=$(aws ecr describe-images \
             --repository-name $ECR_REPOSITORY \
-            --query 'sort_by(imageDetails,& imagePushedAt)[-1].imageTags[0]' \
-            --output text 2>/dev/null)
+            --query 'imageDetails[].imageTags[]' \
+            --output text 2>/dev/null | tr '\t' '\n' \
+            | grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' || true)
 
-          if [ "$LATEST_TAG" == "None" ] || [ -z "$LATEST_TAG" ]; then
-            echo "No previous image found. Using default 0.0.0"
+          if [ -z "$TAGS" ]; then
+            echo "No valid semantic versions found."
             LATEST_TAG="0.0.0"
           else
-            echo "Latest image tag found: $LATEST_TAG"
+            LATEST_TAG=$(echo "$TAGS" | sed 's/^v//' | sort -V | tail -n1)
+            echo "Highest semantic version found: $LATEST_TAG"
           fi
 
           echo "LATEST_TAG=$LATEST_TAG" >> $GITHUB_ENV
 
-      # Step 2: Bump version based on workflow_dispatch input
+      ############################################################
+      # 2️⃣ Validate Version Format
+      ############################################################
+      - name: Validate version format
+        run: |
+          if [[ ! "$LATEST_TAG" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid version format: $LATEST_TAG"
+            exit 1
+          fi
+
+      ############################################################
+      # 3️⃣ Bump Version
+      ############################################################
       - name: Bump version
-        id: version
-        env:
-          LATEST_TAG: ${{ env.LATEST_TAG }}
-          BUMP_MAJOR: ${{ github.event.inputs.bump_major }}
-          BUMP_MINOR: ${{ github.event.inputs.bump_minor }}
-          BUMP_PATCH: ${{ github.event.inputs.bump_patch }}
         run: |
           IFS='.' read -r MAJOR MINOR PATCH <<< "$LATEST_TAG"
 
-          if [ "$BUMP_MAJOR" == "true" ]; then
+          MAJOR=${MAJOR:-0}
+          MINOR=${MINOR:-0}
+          PATCH=${PATCH:-0}
+
+          if [ "${{ github.event.inputs.bump_major }}" == "true" ]; then
             MAJOR=$((MAJOR + 1))
             MINOR=0
             PATCH=0
-          elif [ "$BUMP_MINOR" == "true" ]; then
+          elif [ "${{ github.event.inputs.bump_minor }}" == "true" ]; then
             MINOR=$((MINOR + 1))
             PATCH=0
-          elif [ "$BUMP_PATCH" == "true" ]; then
+          else
             PATCH=$((PATCH + 1))
           fi
 
-          # After bumping MAJOR, MINOR, PATCH
-            NEW_VERSION="$MAJOR.$MINOR.$PATCH"
-            NEW_TAG="v$NEW_VERSION"
+          NEW_VERSION="$MAJOR.$MINOR.$PATCH"
+          NEW_TAG="v$NEW_VERSION"
 
-            echo "New version: $NEW_VERSION"
-            echo "New image tag: $NEW_TAG"
+          echo "Deploying version: $NEW_TAG"
 
-          # Save new tag with v to VERSION file
-            echo "$NEW_TAG" > backend/VERSION
+          echo "$NEW_TAG" > frontend/VERSION
+          echo "IMAGE_TAG=$NEW_TAG" >> $GITHUB_ENV
 
-          # Export IMAGE_TAG for Docker/ECS
-            echo "IMAGE_TAG=$NEW_TAG" >> $GITHUB_ENV
-
-
+      ############################################################
+      # 4️⃣ Build & Push Docker Image
+      ############################################################
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v1
@@ -105,12 +116,26 @@ jobs:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         run: |
           cd frontend
-          echo "Building frontend image with tag: $IMAGE_TAG"
-          export DOCKER_BUILDKIT=0
           docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
 
-      - name: Get current task definition
+      ############################################################
+      # 5️⃣ Save Current Task Definition (for rollback)
+      ############################################################
+      - name: Save current task definition
+        run: |
+          CURRENT_TASK_DEF=$(aws ecs describe-services \
+            --cluster $CLUSTER_NAME \
+            --services $SERVICE_NAME \
+            --query 'services[0].taskDefinition' \
+            --output text)
+
+          echo "CURRENT_TASK_DEF=$CURRENT_TASK_DEF" >> $GITHUB_ENV
+
+      ############################################################
+      # 6️⃣ Register New Task Definition
+      ############################################################
+      - name: Get current task definition JSON
         run: |
           aws ecs describe-task-definition \
             --task-definition $TASK_FAMILY \
@@ -119,19 +144,49 @@ jobs:
       - name: Update task definition with new image
         run: |
           NEW_IMAGE=${{ steps.login-ecr.outputs.registry }}/$ECR_REPOSITORY:$IMAGE_TAG
+
           cat task-def.json | jq --arg IMAGE "$NEW_IMAGE" \
-          '.containerDefinitions[0].image = $IMAGE 
-          | del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy)' \
+          '.containerDefinitions[0].image = $IMAGE
+          | del(.taskDefinitionArn,.revision,.status,.requiresAttributes,
+                .compatibilities,.registeredAt,.registeredBy)' \
           > new-task-def.json
 
       - name: Register new task definition
         run: |
-          aws ecs register-task-definition \
-            --cli-input-json file://new-task-def.json
+          NEW_TASK_DEF=$(aws ecs register-task-definition \
+            --cli-input-json file://new-task-def.json \
+            --query 'taskDefinition.taskDefinitionArn' \
+            --output text)
 
-      - name: Update ECS service
+          echo "NEW_TASK_DEF=$NEW_TASK_DEF" >> $GITHUB_ENV
+
+      ############################################################
+      # 7️⃣ Deploy New Version
+      ############################################################
+      - name: Deploy new task definition
         run: |
           aws ecs update-service \
             --cluster $CLUSTER_NAME \
             --service $SERVICE_NAME \
-            --force-new-deployment
+            --task-definition $NEW_TASK_DEF
+
+      ############################################################
+      # 8️⃣ Wait for Stability
+      ############################################################
+      - name: Wait for service stability
+        run: |
+          aws ecs wait services-stable \
+            --cluster $CLUSTER_NAME \
+            --services $SERVICE_NAME
+
+      ############################################################
+      # 9️⃣ Rollback if Failed
+      ############################################################
+      - name: Rollback on failure
+        if: failure()
+        run: |
+          echo "Deployment failed. Rolling back..."
+          aws ecs update-service \
+            --cluster $CLUSTER_NAME \
+            --service $SERVICE_NAME \
+            --task-definition $CURRENT_TASK_DEF
