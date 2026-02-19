@@ -20,6 +20,10 @@ on:
         description: "Bump PATCH version?"
         type: boolean
         default: true
+      custom_tag_suffix:
+        description: "Optional custom tag suffix (e.g. -dev, -staging)"
+        type: string
+        default: ""
 
 jobs:
   deploy-backend:
@@ -75,9 +79,9 @@ jobs:
           fi
 
       ############################################################
-      # 3️⃣ Bump Version
+      # 3️⃣ Bump Version & Set Custom Tag
       ############################################################
-      - name: Bump version
+      - name: Bump version and set custom tag
         run: |
           IFS='.' read -r MAJOR MINOR PATCH <<< "$LATEST_TAG"
 
@@ -85,44 +89,64 @@ jobs:
           MINOR=${MINOR:-0}
           PATCH=${PATCH:-0}
 
+          # Increment each part if selected
           if [ "${{ github.event.inputs.bump_major }}" == "true" ]; then
             MAJOR=$((MAJOR + 1))
-            MINOR=0
-            PATCH=0
-          elif [ "${{ github.event.inputs.bump_minor }}" == "true" ]; then
+          fi
+          if [ "${{ github.event.inputs.bump_minor }}" == "true" ]; then
             MINOR=$((MINOR + 1))
-            PATCH=0
-          else
+          fi
+          if [ "${{ github.event.inputs.bump_patch }}" == "true" ]; then
             PATCH=$((PATCH + 1))
           fi
 
+          # Reset lower-order parts if higher is increased and not selected
+          if [ "${{ github.event.inputs.bump_major }}" == "true" ]; then
+            if [ "${{ github.event.inputs.bump_minor }}" != "true" ]; then
+              MINOR=0
+            fi
+            if [ "${{ github.event.inputs.bump_patch }}" != "true" ]; then
+              PATCH=0
+            fi
+          fi
+          if [ "${{ github.event.inputs.bump_minor }}" == "true" ] && [ "${{ github.event.inputs.bump_patch }}" != "true" ]; then
+            PATCH=0
+          fi
+
           NEW_VERSION="$MAJOR.$MINOR.$PATCH"
-          NEW_TAG="v$NEW_VERSION"
 
-          echo "Deploying version: $NEW_TAG"
+          # Add optional custom suffix
+          SUFFIX="${{ github.event.inputs.custom_tag_suffix }}"
+          IMAGE_TAG="v$NEW_VERSION$SUFFIX"
 
-          echo "$NEW_TAG" > backend/VERSION
-          echo "IMAGE_TAG=$NEW_TAG" >> $GITHUB_ENV
+          echo "Deploying image with tag: $IMAGE_TAG"
+
+          echo "$IMAGE_TAG" > backend/VERSION
+          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
 
       ############################################################
-      # 4️⃣ Build & Push Docker Image
+      # 4️⃣ Login to ECR
       ############################################################
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v1
 
-      - name: Build and push Backend image
+      ############################################################
+      # 5️⃣ Build & Push Backend image using Compose
+      ############################################################
+      - name: Build Backend image using Docker Compose
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         run: |
-          cd backend
-          echo "building backend image with tag: $IMAGE_TAG"
           export DOCKER_BUILDKIT=0
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          export IMAGE_TAG=$IMAGE_TAG
+          echo "Building backend image with tag: $IMAGE_TAG"
+          docker compose -f docker-compose.backend.ci.yml build
+          docker tag backend:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
 
       ############################################################
-      # 5️⃣ Save Current Task Definition (for rollback)
+      # 6️⃣ Save Current Task Definition (for rollback)
       ############################################################
       - name: Save current task definition
         run: |
@@ -131,11 +155,10 @@ jobs:
             --services $SERVICE_NAME \
             --query 'services[0].taskDefinition' \
             --output text)
-
           echo "CURRENT_TASK_DEF=$CURRENT_TASK_DEF" >> $GITHUB_ENV
 
       ############################################################
-      # 6️⃣ Register New Task Definition
+      # 7️⃣ Register New Task Definition
       ############################################################
       - name: Get current task definition JSON
         run: |
@@ -159,11 +182,10 @@ jobs:
             --cli-input-json file://new-task-def.json \
             --query 'taskDefinition.taskDefinitionArn' \
             --output text)
-
           echo "NEW_TASK_DEF=$NEW_TASK_DEF" >> $GITHUB_ENV
 
       ############################################################
-      # 7️⃣ Deploy New Version
+      # 8️⃣ Deploy New Version
       ############################################################
       - name: Deploy new task definition
         run: |
@@ -173,7 +195,7 @@ jobs:
             --task-definition $NEW_TASK_DEF
 
       ############################################################
-      # 8️⃣ Wait for Stability
+      # 9️⃣ Wait for Stability
       ############################################################
       - name: Wait for service stability
         run: |
@@ -182,7 +204,7 @@ jobs:
             --services $SERVICE_NAME
 
       ############################################################
-      # 9️⃣ Rollback if Failed
+      # 🔟 Rollback if Failed
       ############################################################
       - name: Rollback on failure
         if: failure()
