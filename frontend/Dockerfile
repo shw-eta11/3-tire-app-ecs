@@ -1,7 +1,11 @@
 FROM node:18-alpine
+
 WORKDIR /app
 
-COPY package.json  ./
+# install curl for ECS health check
+RUN apk add --no-cache curl
+
+COPY package.json ./
 RUN npm install
 
 COPY . .
