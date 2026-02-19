@@ -1,3 +1,7 @@
+-- Drop existing tables to start fresh
+DROP TABLE IF EXISTS messages;
+DROP TABLE IF EXISTS categories;
+
 -- Categories Table
 CREATE TABLE IF NOT EXISTS categories (
     id INT AUTO_INCREMENT PRIMARY KEY,
@@ -23,14 +27,14 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 
 -- Insert Categories
-INSERT IGNORE INTO categories (id, name, description, color) VALUES
+INSERT INTO categories (id, name, description, color) VALUES
 (1, 'General', 'General announcements and discussions', '#3498db'),
 (2, 'Tech', 'Technology and development topics', '#e74c3c'),
 (3, 'DevOps', 'DevOps and deployment topics', '#2ecc71'),
 (4, 'Demo', 'Demo and example content', '#f39c12');
 
 -- Insert Sample Messages
-INSERT IGNORE INTO messages (message, category_id, author) VALUES
+INSERT INTO messages (message, category_id, author) VALUES
 ('Welcome to our 3-tier app!', 1, 'System'),
 ('React + Node + MySQL is amazing!', 2, 'System'),
 ('Deploy me on ECS!', 3, 'System'),
