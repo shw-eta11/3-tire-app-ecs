@@ -10,7 +10,7 @@ function App() {
 
   useEffect(() => {
     // Fetch messages
-    axios.get(`${process.env.REACT_APP_BACKEND_URL}/api/messages`)
+    axios.get(`/api/messages`)
       .then(res => {
         if (Array.isArray(res.data?.messages)) {
           setMessages(res.data.messages);
@@ -24,7 +24,7 @@ function App() {
       });
 
     // Fetch categories
-    axios.get(`${process.env.REACT_APP_BACKEND_URL}/api/categories`)
+    axios.get(`/api/categories`)
       .then(res => {
         console.log("Categories API response:", res.data);
         if (Array.isArray(res.data)) {
@@ -45,13 +45,13 @@ function App() {
       return;
     }
 
-    axios.post(`${process.env.REACT_APP_BACKEND_URL}/api/message`, {
+    axios.post(`/api/message`, {
       message: newMessage,
       category: selectedCategory
     })
     .then(() => {
       // Re-fetch messages after insert
-      return axios.get(`${process.env.REACT_APP_BACKEND_URL}/api/messages`);
+      return axios.get(`/api/messages`);
     })
     .then(res => {
       if (Array.isArray(res.data?.messages)) {
