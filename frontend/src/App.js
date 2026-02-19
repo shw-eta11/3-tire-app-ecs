@@ -9,37 +9,69 @@ function App() {
   const [selectedCategory, setSelectedCategory] = useState('');
 
   useEffect(() => {
+    // Fetch messages
     axios.get(`${process.env.REACT_APP_BACKEND_URL}/api/messages`)
-      .then(res => setMessages(res.data.messages))
-      .catch(() => setMessages('Error fetching message'));
+      .then(res => {
+        if (Array.isArray(res.data?.messages)) {
+          setMessages(res.data.messages);
+        } else {
+          setMessages([]);
+        }
+      })
+      .catch(err => {
+        console.error("Messages fetch failed:", err);
+        setMessages([]);
+      });
 
+    // Fetch categories
     axios.get(`${process.env.REACT_APP_BACKEND_URL}/api/categories`)
-      .then(res => setCategories(res.data))
-      .catch(err => console.error(err));
+      .then(res => {
+        console.log("Categories API response:", res.data);
+        if (Array.isArray(res.data)) {
+          setCategories(res.data);
+        } else {
+          setCategories([]);
+        }
+      })
+      .catch(err => {
+        console.error("Categories fetch failed:", err);
+        setCategories([]);
+      });
   }, []);
 
   const handleAddMessage = () => {
-    if(!newMessage || !selectedCategory) return alert('Enter message and select category');
+    if (!newMessage || !selectedCategory) {
+      alert('Enter message and select category');
+      return;
+    }
+
     axios.post(`${process.env.REACT_APP_BACKEND_URL}/api/message`, {
       message: newMessage,
       category: selectedCategory
     })
+    .then(() => {
+      // Re-fetch messages after insert
+      return axios.get(`${process.env.REACT_APP_BACKEND_URL}/api/messages`);
+    })
     .then(res => {
-  console.log("API response:", res.data); // TEMP debug
-  setMessages(res.data?.messages || []);
-})
-
+      if (Array.isArray(res.data?.messages)) {
+        setMessages(res.data.messages);
+      } else {
+        setMessages([]);
+      }
+      setNewMessage('');
+      setSelectedCategory('');
+    })
     .catch(err => {
-  console.error('Error fetching messages:', err);
-  setMessages([]); // keep type consistent (array)
-});
-
+      console.error("Add message failed:", err);
+    });
   };
 
   return (
     <div className="App">
       <header className="App-header">
         <h1>3-Tier React + Node + MySQL App</h1>
+
         <div className="form">
           <input 
             type="text" 
@@ -47,30 +79,42 @@ function App() {
             value={newMessage} 
             onChange={e => setNewMessage(e.target.value)} 
           />
-          <select value={selectedCategory} onChange={e => setSelectedCategory(e.target.value)}>
+
+          <select 
+            value={selectedCategory} 
+            onChange={e => setSelectedCategory(e.target.value)}
+          >
             <option value="">Select Category</option>
-            {categories.map(cat => (
-              <option key={cat.id} value={cat.name}>{cat.name}</option>
-            ))}
+            {Array.isArray(categories) &&
+              categories.map(cat => (
+                <option key={cat.id} value={cat.name}>
+                  {cat.name}
+                </option>
+              ))
+            }
           </select>
-          <button onClick={handleAddMessage}>Add Message</button>
+
+          <button onClick={handleAddMessage}>
+            Add Message
+          </button>
         </div>
+
         <div className="messages">
-        <h2>All Messages</h2>
+          <h2>All Messages</h2>
 
-        {!Array.isArray(messages) || messages.length === 0 ? (
+          {!Array.isArray(messages) || messages.length === 0 ? (
+            <p>No messages yet</p>
+          ) : (
+            <ul>
+              {messages.map(msg => (
+                <li key={msg.id}>
+                  <strong>{msg.category}</strong> : {msg.message}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
 
-          <p>No messages yet</p>
-        ) : (
-          <ul>
-            {messages.map(msg => (
-              <li key={msg.id}>
-                <strong>{msg.category}</strong> : {msg.message}
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
       </header>
     </div>
   );
