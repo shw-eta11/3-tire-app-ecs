@@ -23,12 +23,14 @@ function App() {
         setMessages([]);
       });
 
-    // Fetch categories
+    // Fetch categories and remove duplicates
     axios.get(`/api/categories`)
       .then(res => {
-        console.log("Categories API response:", res.data);
         if (Array.isArray(res.data)) {
-          setCategories(res.data);
+          const uniqueCategories = Array.from(
+            new Map(res.data.map(cat => [cat.name, cat])).values()
+          );
+          setCategories(uniqueCategories);
         } else {
           setCategories([]);
         }
@@ -49,10 +51,7 @@ function App() {
       message: newMessage,
       category: selectedCategory
     })
-    .then(() => {
-      // Re-fetch messages after insert
-      return axios.get(`/api/messages`);
-    })
+    .then(() => axios.get(`/api/messages`))
     .then(res => {
       if (Array.isArray(res.data?.messages)) {
         setMessages(res.data.messages);
@@ -105,13 +104,26 @@ function App() {
           {!Array.isArray(messages) || messages.length === 0 ? (
             <p>No messages yet</p>
           ) : (
-            <ul>
-              {messages.map(msg => (
-                <li key={msg.id}>
-                  <strong>{msg.category}</strong> : {msg.message}
-                </li>
-              ))}
-            </ul>
+            <table>
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Category</th>
+                  <th>Message</th>
+                  <th>Created At</th>
+                </tr>
+              </thead>
+              <tbody>
+                {messages.map(msg => (
+                  <tr key={msg.id}>
+                    <td>{msg.id}</td>
+                    <td>{msg.category}</td>
+                    <td>{msg.message}</td>
+                    <td>{msg.created_at}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           )}
         </div>
 
