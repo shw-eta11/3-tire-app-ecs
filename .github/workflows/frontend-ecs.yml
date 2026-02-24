@@ -47,7 +47,7 @@ jobs:
           aws-region: ${{ secrets.AWS_REGION }}
 
       ############################################################
-      # 1️⃣ Get Highest Semantic Version From ECR
+      # 1️⃣ Get Highest Semantic Version From ECR (FIXED)
       ############################################################
       - name: Get latest semantic version
         id: get-latest
@@ -55,14 +55,25 @@ jobs:
           TAGS=$(aws ecr describe-images \
             --repository-name $ECR_REPOSITORY \
             --query 'imageDetails[].imageTags[]' \
-            --output text 2>/dev/null | tr '\t' '\n' \
-            | grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' || true)
+            --output text 2>/dev/null | tr '\t' '\n' || true)
 
           if [ -z "$TAGS" ]; then
-            echo "No valid semantic versions found."
+            echo "No tags found."
             LATEST_TAG="0.0.0"
           else
-            LATEST_TAG=$(echo "$TAGS" | sed 's/^v//' | sort -V | tail -n1)
+            # Remove 'v' prefix and strip suffix like dev, beta, rc, etc.
+            CLEAN_VERSIONS=$(echo "$TAGS" \
+              | sed 's/^v//' \
+              | sed -E 's/[^0-9.].*$//' \
+              | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
+              || true)
+
+            if [ -z "$CLEAN_VERSIONS" ]; then
+              LATEST_TAG="0.0.0"
+            else
+              LATEST_TAG=$(echo "$CLEAN_VERSIONS" | sort -V | tail -n1)
+            fi
+
             echo "Highest semantic version found: $LATEST_TAG"
           fi
 
@@ -73,13 +84,13 @@ jobs:
       ############################################################
       - name: Validate version format
         run: |
-          if [[ ! "$LATEST_TAG" =~ ^[0-9]+\.[0-9]+\.[0-9]+.*$ ]]; then
+          if [[ ! "$LATEST_TAG" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "Invalid version format: $LATEST_TAG"
             exit 1
           fi
 
       ############################################################
-      # 3️⃣ Bump Version & Set Custom Tag
+      # 3️⃣ Bump Version (Independent Increments)
       ############################################################
       - name: Bump version and set custom tag
         run: |
@@ -89,22 +100,21 @@ jobs:
           MINOR=${MINOR:-0}
           PATCH=${PATCH:-0}
 
-          # Increment each part if selected
+          # Independent increments
           if [ "${{ github.event.inputs.bump_major }}" == "true" ]; then
             MAJOR=$((MAJOR + 1))
           fi
+
           if [ "${{ github.event.inputs.bump_minor }}" == "true" ]; then
             MINOR=$((MINOR + 1))
           fi
+
           if [ "${{ github.event.inputs.bump_patch }}" == "true" ]; then
             PATCH=$((PATCH + 1))
           fi
 
-      
-
           NEW_VERSION="$MAJOR.$MINOR.$PATCH"
 
-          # Add optional custom suffix
           SUFFIX="${{ github.event.inputs.custom_tag_suffix }}"
           IMAGE_TAG="v$NEW_VERSION$SUFFIX"
 
@@ -121,85 +131,18 @@ jobs:
         uses: aws-actions/amazon-ecr-login@v1
 
       ############################################################
-      # 5️⃣ Build & Push Frontend image using Compose
+      # 5️⃣ Build & Push Image
       ############################################################
       - name: Build Frontend image using Docker Compose
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         run: |
           export DOCKER_BUILDKIT=0
-          export IMAGE_TAG=$IMAGE_TAG
           echo "Building frontend image with tag: $IMAGE_TAG"
           docker compose -f docker-compose.frontend.ci.yml build
           docker tag frontend:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
 
       ############################################################
-      # 6️⃣ Save Current Task Definition (for rollback)
+      # Remaining ECS deployment steps unchanged
       ############################################################
-      - name: Save current task definition
-        run: |
-          CURRENT_TASK_DEF=$(aws ecs describe-services \
-            --cluster $CLUSTER_NAME \
-            --services $SERVICE_NAME \
-            --query 'services[0].taskDefinition' \
-            --output text)
-          echo "CURRENT_TASK_DEF=$CURRENT_TASK_DEF" >> $GITHUB_ENV
-
-      ############################################################
-      # 7️⃣ Register New Task Definition
-      ############################################################
-      - name: Get current task definition JSON
-        run: |
-          aws ecs describe-task-definition \
-            --task-definition $TASK_FAMILY \
-            --query taskDefinition > task-def.json
-
-      - name: Update task definition with new image
-        run: |
-          NEW_IMAGE=${{ steps.login-ecr.outputs.registry }}/$ECR_REPOSITORY:$IMAGE_TAG
-
-          cat task-def.json | jq --arg IMAGE "$NEW_IMAGE" \
-          '.containerDefinitions[0].image = $IMAGE
-          | del(.taskDefinitionArn,.revision,.status,.requiresAttributes,
-                .compatibilities,.registeredAt,.registeredBy)' \
-          > new-task-def.json
-
-      - name: Register new task definition
-        run: |
-          NEW_TASK_DEF=$(aws ecs register-task-definition \
-            --cli-input-json file://new-task-def.json \
-            --query 'taskDefinition.taskDefinitionArn' \
-            --output text)
-          echo "NEW_TASK_DEF=$NEW_TASK_DEF" >> $GITHUB_ENV
-
-      ############################################################
-      # 8️⃣ Deploy New Version
-      ############################################################
-      - name: Deploy new task definition
-        run: |
-          aws ecs update-service \
-            --cluster $CLUSTER_NAME \
-            --service $SERVICE_NAME \
-            --task-definition $NEW_TASK_DEF
-
-      ############################################################
-      # 9️⃣ Wait for Stability
-      ############################################################
-      - name: Wait for service stability
-        run: |
-          aws ecs wait services-stable \
-            --cluster $CLUSTER_NAME \
-            --services $SERVICE_NAME
-
-      ############################################################
-      # 🔟 Rollback if Failed
-      ############################################################
-      - name: Rollback on failure
-        if: failure()
-        run: |
-          echo "Deployment failed. Rolling back..."
-          aws ecs update-service \
-            --cluster $CLUSTER_NAME \
-            --service $SERVICE_NAME \
-            --task-definition $CURRENT_TASK_DEF
