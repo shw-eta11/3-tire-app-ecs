@@ -47,9 +47,9 @@ jobs:
           aws-region: ${{ secrets.AWS_REGION }}
 
       ############################################################
-      # 1️⃣ Get Highest Semantic Version From ECR (FIXED)
+      # 1️⃣ Get Highest Numeric Semantic Version from ECR
       ############################################################
-      - name: Get latest semantic version
+      - name: Get latest numeric version
         id: get-latest
         run: |
           TAGS=$(aws ecr describe-images \
@@ -73,7 +73,7 @@ jobs:
               LATEST_TAG=$(echo "$CLEAN_VERSIONS" | sort -V | tail -n1)
             fi
 
-            echo "Highest semantic version found: $LATEST_TAG"
+            echo "Highest numeric version found: $LATEST_TAG"
           fi
 
           echo "LATEST_TAG=$LATEST_TAG" >> $GITHUB_ENV
@@ -89,7 +89,7 @@ jobs:
           fi
 
       ############################################################
-      # 3️⃣ Bump Version (Independent)
+      # 3️⃣ Bump Version & Add Suffix
       ############################################################
       - name: Bump version and set custom tag
         run: |
@@ -99,25 +99,26 @@ jobs:
           MINOR=${MINOR:-0}
           PATCH=${PATCH:-0}
 
+          # Increment version parts based on workflow inputs
           if [ "${{ github.event.inputs.bump_major }}" == "true" ]; then
             MAJOR=$((MAJOR + 1))
           fi
-
           if [ "${{ github.event.inputs.bump_minor }}" == "true" ]; then
             MINOR=$((MINOR + 1))
           fi
-
           if [ "${{ github.event.inputs.bump_patch }}" == "true" ]; then
             PATCH=$((PATCH + 1))
           fi
 
           NEW_VERSION="$MAJOR.$MINOR.$PATCH"
 
+          # Add custom suffix (kept separate from version bump)
           SUFFIX="${{ github.event.inputs.custom_tag_suffix }}"
           IMAGE_TAG="v$NEW_VERSION$SUFFIX"
 
           echo "Deploying image with tag: $IMAGE_TAG"
 
+          # Save to file and GitHub environment
           echo "$IMAGE_TAG" > backend/VERSION
           echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
 
@@ -129,18 +130,85 @@ jobs:
         uses: aws-actions/amazon-ecr-login@v1
 
       ############################################################
-      # 5️⃣ Build & Push Backend Image
+      # 5️⃣ Build & Push Backend image using Docker Compose
       ############################################################
       - name: Build Backend image using Docker Compose
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         run: |
           export DOCKER_BUILDKIT=0
+          export IMAGE_TAG=$IMAGE_TAG
           echo "Building backend image with tag: $IMAGE_TAG"
           docker compose -f docker-compose.backend.ci.yml build
           docker tag backend:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
 
       ############################################################
-      # Remaining ECS steps unchanged
+      # 6️⃣ Save Current Task Definition (for rollback)
       ############################################################
+      - name: Save current task definition
+        run: |
+          CURRENT_TASK_DEF=$(aws ecs describe-services \
+            --cluster $CLUSTER_NAME \
+            --services $SERVICE_NAME \
+            --query 'services[0].taskDefinition' \
+            --output text)
+          echo "CURRENT_TASK_DEF=$CURRENT_TASK_DEF" >> $GITHUB_ENV
+
+      ############################################################
+      # 7️⃣ Register New Task Definition
+      ############################################################
+      - name: Get current task definition JSON
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition $TASK_FAMILY \
+            --query taskDefinition > task-def.json
+
+      - name: Update task definition with new image
+        run: |
+          NEW_IMAGE=${{ steps.login-ecr.outputs.registry }}/$ECR_REPOSITORY:$IMAGE_TAG
+
+          cat task-def.json | jq --arg IMAGE "$NEW_IMAGE" \
+          '.containerDefinitions[0].image = $IMAGE
+          | del(.taskDefinitionArn,.revision,.status,.requiresAttributes,
+                .compatibilities,.registeredAt,.registeredBy)' \
+          > new-task-def.json
+
+      - name: Register new task definition
+        run: |
+          NEW_TASK_DEF=$(aws ecs register-task-definition \
+            --cli-input-json file://new-task-def.json \
+            --query 'taskDefinition.taskDefinitionArn' \
+            --output text)
+          echo "NEW_TASK_DEF=$NEW_TASK_DEF" >> $GITHUB_ENV
+
+      ############################################################
+      # 8️⃣ Deploy New Version
+      ############################################################
+      - name: Deploy new task definition
+        run: |
+          aws ecs update-service \
+            --cluster $CLUSTER_NAME \
+            --service $SERVICE_NAME \
+            --task-definition $NEW_TASK_DEF
+
+      ############################################################
+      # 9️⃣ Wait for Stability
+      ############################################################
+      - name: Wait for service stability
+        run: |
+          aws ecs wait services-stable \
+            --cluster $CLUSTER_NAME \
+            --services $SERVICE_NAME
+
+      ############################################################
+      # 🔟 Rollback if Failed
+      ############################################################
+      - name: Rollback on failure
+        if: failure()
+        run: |
+          echo "Deployment failed. Rolling back..."
+          aws ecs update-service \
+            --cluster $CLUSTER_NAME \
+            --service $SERVICE_NAME \
+            --task-definition $CURRENT_TASK_DEF
