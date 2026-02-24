@@ -47,33 +47,37 @@ jobs:
           aws-region: ${{ secrets.AWS_REGION }}
 
       ############################################################
-      # 1️⃣ Get Highest Numeric Semantic Version from ECR
+      # 1️⃣ Get Highest Semantic Version From ECR (Suffix-Aware)
       ############################################################
-      - name: Get latest numeric version
+      - name: Get latest semantic version for suffix
         id: get-latest
         run: |
+          SUFFIX="${{ github.event.inputs.custom_tag_suffix }}"
+
           TAGS=$(aws ecr describe-images \
             --repository-name $ECR_REPOSITORY \
             --query 'imageDetails[].imageTags[]' \
             --output text 2>/dev/null | tr '\t' '\n' || true)
 
+          if [ -n "$SUFFIX" ]; then
+            TAGS=$(echo "$TAGS" | grep -F "$SUFFIX" || true)
+          fi
+
           if [ -z "$TAGS" ]; then
-            echo "No tags found."
+            echo "No tags found for suffix '$SUFFIX'. Starting from 0.0.0"
             LATEST_TAG="0.0.0"
           else
             CLEAN_VERSIONS=$(echo "$TAGS" \
               | sed 's/^v//' \
               | sed -E 's/[^0-9.].*$//' \
-              | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
-              || true)
+              | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' || true)
 
             if [ -z "$CLEAN_VERSIONS" ]; then
               LATEST_TAG="0.0.0"
             else
               LATEST_TAG=$(echo "$CLEAN_VERSIONS" | sort -V | tail -n1)
             fi
-
-            echo "Highest numeric version found: $LATEST_TAG"
+            echo "Latest numeric version for suffix '$SUFFIX': $LATEST_TAG"
           fi
 
           echo "LATEST_TAG=$LATEST_TAG" >> $GITHUB_ENV
@@ -89,17 +93,17 @@ jobs:
           fi
 
       ############################################################
-      # 3️⃣ Bump Version & Add Suffix
+      # 3️⃣ Bump Version & Set Custom Tag
       ############################################################
       - name: Bump version and set custom tag
         run: |
+          SUFFIX="${{ github.event.inputs.custom_tag_suffix }}"
           IFS='.' read -r MAJOR MINOR PATCH <<< "$LATEST_TAG"
 
           MAJOR=${MAJOR:-0}
           MINOR=${MINOR:-0}
           PATCH=${PATCH:-0}
 
-          # Increment version parts based on workflow inputs
           if [ "${{ github.event.inputs.bump_major }}" == "true" ]; then
             MAJOR=$((MAJOR + 1))
           fi
@@ -111,14 +115,10 @@ jobs:
           fi
 
           NEW_VERSION="$MAJOR.$MINOR.$PATCH"
-
-          # Add custom suffix (kept separate from version bump)
-          SUFFIX="${{ github.event.inputs.custom_tag_suffix }}"
           IMAGE_TAG="v$NEW_VERSION$SUFFIX"
 
           echo "Deploying image with tag: $IMAGE_TAG"
 
-          # Save to file and GitHub environment
           echo "$IMAGE_TAG" > frontend/VERSION
           echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
 
@@ -130,7 +130,7 @@ jobs:
         uses: aws-actions/amazon-ecr-login@v1
 
       ############################################################
-      # 5️⃣ Build & Push Frontend image using Docker Compose
+      # 5️⃣ Build & Push Frontend image using Compose
       ############################################################
       - name: Build Frontend image using Docker Compose
         env:
