@@ -100,18 +100,7 @@ jobs:
             PATCH=$((PATCH + 1))
           fi
 
-          # Reset lower-order parts if higher is increased and not selected
-          if [ "${{ github.event.inputs.bump_major }}" == "true" ]; then
-            if [ "${{ github.event.inputs.bump_minor }}" != "true" ]; then
-              MINOR=0
-            fi
-            if [ "${{ github.event.inputs.bump_patch }}" != "true" ]; then
-              PATCH=0
-            fi
-          fi
-          if [ "${{ github.event.inputs.bump_minor }}" == "true" ] && [ "${{ github.event.inputs.bump_patch }}" != "true" ]; then
-            PATCH=0
-          fi
+      
 
           NEW_VERSION="$MAJOR.$MINOR.$PATCH"
 
